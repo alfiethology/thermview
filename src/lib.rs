@@ -1,5 +1,7 @@
 pub mod app;
 pub mod bytes;
+pub mod calibrate;
+mod calibrate_ui;
 pub mod colorbar;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dialog;

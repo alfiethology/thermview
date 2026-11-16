@@ -42,6 +42,33 @@ pub fn paint(p: &Painter, rect: Rect, doc: &Doc) {
         label(p, rect, c, &text, colour, fs, arm);
     }
 
+    if let Some(r) = doc.calibration.settings.region {
+        let area = Rect::from_min_max(
+            rect.min + vec2(r.x0 as f32, r.y0 as f32) * factor,
+            rect.min + vec2((r.x1 + 1) as f32, (r.y1 + 1) as f32) * factor,
+        );
+        p.rect_stroke(area, 0.0, Stroke::new(1.5, Color32::YELLOW), StrokeKind::Inside);
+        p.text(area.left_top(), Align2::LEFT_BOTTOM, "REF", figure(fs), Color32::YELLOW);
+    }
+    if doc.calibration.applied {
+        let offset = doc
+            .calibration
+            .settings
+            .reading(&doc.source)
+            .ok()
+            .and_then(|r| r.offset_c)
+            .unwrap_or(0.0);
+        // Always label corrected exports, even when ordinary info overlays are hidden.
+        let value = if doc.unit == Unit::Fahrenheit { offset * 1.8 } else { offset };
+        p.text(
+            rect.center_top() + vec2(0.0, 4.0),
+            Align2::CENTER_TOP,
+            format!("REFERENCE OFFSET {value:+.3} {}", doc.unit.symbol()),
+            figure(fs),
+            Color32::YELLOW,
+        );
+    }
+
     if doc.overlays.extremes {
         let (lo, hi) = (img.stats.min, img.stats.max);
         if (lo.x, lo.y) != (hi.x, hi.y) {

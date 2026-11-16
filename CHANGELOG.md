@@ -6,6 +6,11 @@ All notable changes to thermview are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Fourth Calibrate tab with point/area reference selection, independent reference emissivity and distance, and an optional independently known surface temperature.
+- Cancellable video reference history, per-frame error plot and CSV audit report with failures and original reference readings.
+- Explicit optional per-frame additive target correction, kept separate from reference emissivity, reversible from retained raw counts, and included in range measurements and labelled image exports. Fixed-position, constant-temperature confirmation is required for video correction.
+
 ## [0.2.0] - 2026-11-15
 
 ### Fixed

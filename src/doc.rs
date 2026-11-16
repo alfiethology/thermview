@@ -36,6 +36,7 @@ pub struct Doc {
     pub points: Vec<Point>,
     pub revision: u64,
     pub measurement: crate::measure::Measurement,
+    pub calibration: crate::calibrate::Calibration,
     pub video: Option<crate::video::Video>,
     next_id: u32,
 }
@@ -55,6 +56,7 @@ impl Doc {
             name: name.to_string(),
             stamp,
             image: source.clone(),
+            calibration: crate::calibrate::Calibration::new(&source),
             source,
             look,
             unit: Unit::default(),
@@ -87,7 +89,11 @@ impl Doc {
         let source = video.frame(index)?;
         let params = self.image.params;
         let adjusted = params != self.source.params;
-        self.image = if adjusted { source.recompute(params) } else { source.clone() };
+        let mut image = if adjusted { source.recompute(params) } else { source.clone() };
+        if self.calibration.applied {
+            self.calibration.settings.correct(&source, &mut image).map_err(crate::Error::new)?;
+        }
+        self.image = image;
         self.source = source;
         self.points.retain(|p| p.x < self.image.width && p.y < self.image.height);
         let auto_range = video.auto_range;
@@ -108,9 +114,48 @@ impl Doc {
     pub fn set_params(&mut self, params: Params) {
         if params != self.image.params && self.image.recomputable() {
             self.measurement.invalidate();
+            self.calibration.invalidate_report();
             self.image = self.source.recompute(params);
+            if self.calibration.applied {
+                if let Err(e) = self.calibration.settings.correct(&self.source, &mut self.image) {
+                    self.calibration.applied = false;
+                    self.calibration.error = Some(e);
+                }
+            }
             self.revision += 1;
         }
+    }
+
+    pub fn set_reference(&mut self, settings: crate::calibrate::Settings) {
+        if settings != self.calibration.settings {
+            self.calibration.settings = settings;
+            self.calibration.invalidate_report();
+            // Any changed reference requires an explicit new decision to apply.
+            let _ = self.apply_reference(false);
+        }
+    }
+
+    pub fn apply_reference(&mut self, enabled: bool) -> Result<(), String> {
+        if enabled && self.video.is_some() && !self.calibration.settings.fixed_reference {
+            return Err("Confirm the reference stays at these coordinates and at the known temperature throughout the video.".into());
+        }
+        let params = self.image.params;
+        let mut image = if params != self.source.params {
+            self.source.recompute(params)
+        } else {
+            self.source.clone()
+        };
+        if enabled {
+            self.calibration.settings.correct(&self.source, &mut image)?;
+        }
+        self.image = image;
+        self.calibration.applied = enabled;
+        if self.video.as_ref().is_none_or(|v| v.auto_range) {
+            self.auto_range();
+        }
+        self.measurement.invalidate();
+        self.revision += 1;
+        Ok(())
     }
 
     pub fn auto_range(&mut self) {

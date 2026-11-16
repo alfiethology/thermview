@@ -18,6 +18,7 @@ enum Sidebar {
     Explorer,
     Controls,
     Measure,
+    Calibrate,
 }
 
 pub struct App {
@@ -212,6 +213,11 @@ impl App {
             (Sidebar::Explorer, "FILES", "Explorer · Ctrl+Shift+E"),
             (Sidebar::Controls, "LOOK", "Image controls · palette, range and display"),
             (Sidebar::Measure, "MEASURE", "Video range measurements · I / O to mark frames"),
+            (
+                Sidebar::Calibrate,
+                "CALIBRATE",
+                "Independent reference emissivity, temperature and video drift",
+            ),
         ] {
             let (rect, response) = ui.allocate_exact_size(vec2(52.0, 58.0), Sense::click());
             let on = self.sidebar == Some(panel);
@@ -247,6 +253,11 @@ impl App {
                     stroke,
                     StrokeKind::Inside,
                 );
+            } else if panel == Sidebar::Calibrate {
+                p.circle_stroke(center, 10.0, stroke);
+                p.circle_stroke(center, 4.0, stroke);
+                p.line_segment([center + vec2(-13.0, 0.0), center + vec2(13.0, 0.0)], stroke);
+                p.line_segment([center + vec2(0.0, -13.0), center + vec2(0.0, 13.0)], stroke);
             } else if panel == Sidebar::Measure {
                 p.line_segment([center + vec2(-11.0, 8.0), center + vec2(11.0, 8.0)], stroke);
                 for (x, height) in [(-7.0, 9.0), (0.0, 20.0), (7.0, 14.0)] {
@@ -286,6 +297,7 @@ impl App {
                 .legend(match self.sidebar {
                     Some(Sidebar::Explorer) => "explorer",
                     Some(Sidebar::Measure) => "measure",
+                    Some(Sidebar::Calibrate) => "calibrate",
                     _ => "image controls",
                 })
                 .show(ui);
@@ -328,6 +340,15 @@ impl App {
                 egui::ScrollArea::vertical()
                     .id_salt("measure scroll")
                     .show(ui, |ui| self.measure_panel(ui));
+            }
+            Some(Sidebar::Calibrate) => {
+                egui::ScrollArea::vertical().id_salt("calibrate scroll").show(ui, |ui| {
+                    if let Some(doc) = &mut self.doc {
+                        crate::calibrate_ui::show(ui, doc, self.path.as_deref());
+                    } else {
+                        hint(ui, "open a thermal image or video to select a reference");
+                    }
+                });
             }
             None => {}
         }
@@ -402,6 +423,10 @@ impl App {
             && let Some(video) = &doc.video
         {
             doc.measurement.advance(video);
+            doc.calibration.advance(video);
+            if doc.calibration.running() {
+                ctx.request_repaint();
+            }
             if doc.measurement.running() {
                 ctx.request_repaint();
             }
@@ -507,6 +532,9 @@ impl App {
                     let params =
                         (doc.image.params != doc.source.params).then_some(doc.image.params);
                     measurement.begin(video.len(), params);
+                    measurement.set_reference_correction(
+                        doc.calibration.applied.then_some(doc.calibration.settings),
+                    );
                     ui.ctx().request_repaint();
                 }
                 if ui
@@ -609,6 +637,13 @@ impl App {
                 hint(ui, "mean of valid pixels in analysed frames");
             });
             ui.add_space(8.0);
+            if result.reference_corrected {
+                note(
+                    ui,
+                    "Includes per-frame reference offsets. Original file readings remain available with correction disabled.",
+                    READOUT,
+                );
+            }
             hint(
                 ui,
                 if result.edited_calibration {
@@ -740,7 +775,11 @@ impl App {
                 ui.add_space(4.0);
                 colorbar::show(ui, doc, size.y.max(300.0));
                 ui.add_space(8.0);
-                let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+                let selecting = doc.calibration.selecting;
+                let (rect, resp) = ui.allocate_exact_size(
+                    size,
+                    if selecting { Sense::click_and_drag() } else { Sense::click() },
+                );
                 let p = ui.painter_at(rect.expand(1.0));
                 p.rect_filled(rect, 0.0, WELL);
                 p.image(
@@ -772,7 +811,46 @@ impl App {
                 if let (Some(at), Some((_, _, c))) = (resp.hover_pos(), self.pointer) {
                     tag(&ui.painter_at(rect), rect, at, &doc.unit.reading(c));
                 }
-                if resp.clicked()
+                if selecting {
+                    if resp.drag_started() {
+                        doc.calibration.drag_start =
+                            ui.input(|i| i.pointer.press_origin()).and_then(pixel);
+                    }
+                    let end = resp.interact_pointer_pos().map(|at| {
+                        let v = (at - rect.min) / s;
+                        (
+                            v.x.floor().clamp(0.0, doc.image.width.saturating_sub(1) as f32)
+                                as usize,
+                            v.y.floor().clamp(0.0, doc.image.height.saturating_sub(1) as f32)
+                                as usize,
+                        )
+                    });
+                    if let (Some(start), Some(end)) = (doc.calibration.drag_start, end) {
+                        let region = crate::calibrate::Region::between(start, end);
+                        let r = Rect::from_min_max(
+                            rect.min + vec2(region.x0 as f32, region.y0 as f32) * s,
+                            rect.min + vec2((region.x1 + 1) as f32, (region.y1 + 1) as f32) * s,
+                        );
+                        p.rect_stroke(r, 0.0, Stroke::new(2.0, READOUT), StrokeKind::Inside);
+                        if resp.drag_stopped() {
+                            let mut settings = doc.calibration.settings;
+                            settings.region =
+                                Some(crate::calibrate_ui::region_from_drag(start, end));
+                            settings.fixed_reference = false;
+                            doc.set_reference(settings);
+                            doc.calibration.selecting = false;
+                            doc.calibration.drag_start = None;
+                        }
+                    } else if resp.clicked()
+                        && let Some(at) = resp.interact_pointer_pos().and_then(pixel)
+                    {
+                        let mut settings = doc.calibration.settings;
+                        settings.region = Some(crate::calibrate::Region::between(at, at));
+                        settings.fixed_reference = false;
+                        doc.set_reference(settings);
+                        doc.calibration.selecting = false;
+                    }
+                } else if resp.clicked()
                     && let Some((x, y)) = resp.interact_pointer_pos().and_then(pixel)
                 {
                     doc.add_point(x, y);
@@ -784,6 +862,10 @@ impl App {
     fn playback(&mut self, ctx: &egui::Context) {
         let Some(doc) = &mut self.doc else { return };
         let Some(video) = &mut doc.video else { return };
+        if doc.calibration.selecting {
+            video.playing = false;
+            return;
+        }
         let now = ctx.input(|i| i.time);
         let keyboard = !ctx.egui_wants_keyboard_input();
         if keyboard && ctx.input(|i| i.key_pressed(egui::Key::Space)) {

@@ -56,7 +56,7 @@ pub fn save(_beside: Option<&std::path::Path>, name: &str, bytes: &[u8]) -> Resu
     let fail = |e: wasm_bindgen::JsValue| format!("download failed: {e:?}");
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("image/png");
+    opts.set_type(if name.ends_with(".csv") { "text/csv;charset=utf-8" } else { "image/png" });
     let blob =
         web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(fail)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(fail)?;

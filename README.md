@@ -260,6 +260,62 @@ Results show the hottest and coldest temperatures with their frame numbers and z
 
 Analysis uses each frame's recorded calibration, or your current edited calibration when recalibrated. Changing calibration or either mark clears old results; changing the palette or display unit does not. Invalid temperatures are excluded. Unreadable frames and frames with no valid readings are skipped, and analysis continues through the selected range. The result shows successfully analysed frames versus selected frames. When frames were skipped, a partial-coverage notice makes clear that extrema, averages and ranked candidates describe the readable frames only; the temperatures of skipped frames remain unknown. The **Failures** box at the bottom of Measure lists the skipped frame numbers and errors (hover a row for the full message). If every selected frame fails, no temperature summary is produced. Failure details are cleared with a new analysis, changed marks, recalibration or Reset. **Reset** clears marks and results. I/O shortcuts are ignored while editing text or numeric fields.
 
+### Calibrate using a reference patch
+
+The fourth left-hand tab, **Calibrate**, checks a reference independently of the
+target surface (for example, tape and an animal's eye can use different emissivities).
+This requires a FLIR image or CSQ video with retained raw sensor counts.
+
+1. Choose **Select reference**, then click one pixel or drag an area fully inside
+   the reference patch. A yellow **REF** outline marks the selection. Selection
+   pauses playback and does not add a target measurement point.
+2. Enter the **Reference emissivity** and **Reference distance**. Other reference
+   environmental settings and camera coefficients come from each frame's file
+   metadata. Reference settings are independent of **Target emissivity** and the
+   target settings in the right-hand Calibration panel.
+3. If available, enable **Independently known temperature** and enter a surface
+   temperature measured independently, for example with an appropriate calibrated
+   contact sensor. Knowing emissivity alone does not provide a known temperature.
+4. Press **Check reference** to calculate the patch's mean, minimum and maximum
+   for each video frame (or the current still image). The plot shows measured
+   minus known temperature, or the reference temperature when no known value is
+   supplied. Analysis is cancellable, retains failures as gaps and does not move
+   the displayed frame. **Export reference CSV** records settings, original
+   reference readings, suggested offsets, correction status and failures. CSV
+   temperatures are always Celsius; frame numbers are one-based and pixel
+   coordinates zero-based.
+
+**Apply per-frame additive correction** is optional and starts off. For a video,
+you must confirm that the patch remains at the selected pixel coordinates and
+that its independently known temperature remains constant throughout recording.
+There is no automatic tracking or variable-temperature reference input. If the
+camera or patch moves, disable correction and reposition the selection; do not
+apply a single fixed selection across a recording where that condition is false.
+
+For each frame, the offset is `known reference temperature − mean reference
+reading`. That offset is added to valid target temperatures **after** conversion
+with the target's own emissivity. The reference is always calculated from the
+original raw counts, so correction is not cumulative and target edits do not
+change the reference reading. The patch's separately calculated reading may
+therefore differ from a target spot placed over that patch.
+
+When enabled, correction applies to the displayed temperatures, point readings,
+range measurements and image exports. Corrected images carry a **REFERENCE
+OFFSET** label even if ordinary information overlays are hidden. Unreadable
+frames or invalid reference areas have no correction; corrected playback reports
+an error instead of silently displaying that frame without correction, and range
+analysis skips it and reports the failure. Disable the correction to restore
+uncorrected target readings. Editing reference settings removes the correction
+and clears its history; target edits retain the correction but clear old history
+and range results. Opening another file resets the reference. Reference settings
+are session-only; export the CSV to keep a record.
+
+A single reference supports a local additive adjustment, not a calibration across
+all temperatures. It cannot separate camera drift from an incorrect reference,
+reflections or other measurement errors, and does not establish physical accuracy
+or replace an appropriate target emissivity. Validate a correction against
+independent references across the temperature range relevant to the experiment.
+
 ### Web
 
 ```bash

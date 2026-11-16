@@ -79,6 +79,16 @@ impl Harness {
         self.texts().into_iter().find(|(t, _)| t == text).map(|(_, r)| r)
     }
 
+    /// Bounds of the thermal texture, excluding font and solid-colour meshes.
+    pub fn thermal_rect(&self) -> Option<Rect> {
+        self.last.as_ref()?.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                Some(mesh.calc_bounds())
+            }
+            _ => None,
+        })
+    }
+
     pub fn png(&self) -> Vec<u8> {
         let out = self.last.as_ref().expect("a frame ran");
         let prims = self.ctx.tessellate(out.shapes.clone(), out.pixels_per_point);

@@ -29,6 +29,7 @@ pub struct Summary {
     pub average_min: f64,
     pub mean: f64,
     pub edited_calibration: bool,
+    pub reference_corrected: bool,
 }
 
 #[derive(Default)]
@@ -47,6 +48,7 @@ struct Job {
     end: usize,
     next: usize,
     params: Option<Params>,
+    correction: Option<crate::calibrate::Settings>,
     hottest: Option<FrameSpot>,
     hottest_frames: Vec<FrameSpot>,
     coldest: Option<FrameSpot>,
@@ -105,6 +107,7 @@ impl Measurement {
             end,
             next: start,
             params,
+            correction: None,
             hottest: None,
             hottest_frames: Vec::new(),
             coldest: None,
@@ -114,6 +117,11 @@ impl Measurement {
             pixels: 0,
         });
     }
+    pub fn set_reference_correction(&mut self, settings: Option<crate::calibrate::Settings>) {
+        if let Some(job) = &mut self.job {
+            job.correction = settings;
+        }
+    }
     pub fn advance(&mut self, video: &Video) {
         let Some(mut job) = self.job.take() else { return };
         #[cfg(not(target_arch = "wasm32"))]
@@ -121,11 +129,14 @@ impl Measurement {
         for _ in 0..4 {
             let index = job.next;
             let outcome = video.frame(index).and_then(|frame| {
-                let frame = match job.params {
+                let mut image = match job.params {
                     Some(params) => frame.recompute(params),
-                    None => frame,
+                    None => frame.clone(),
                 };
-                job.push(&frame)
+                if let Some(settings) = job.correction {
+                    settings.correct(&frame, &mut image).map_err(Error::new)?;
+                }
+                job.push(&image)
             });
             if let Err(error) = outcome {
                 self.failures.push(FrameFailure { frame: index, error: error.to_string() });
@@ -198,6 +209,7 @@ impl Job {
             average_min: self.minima / frames as f64,
             mean: self.sum / self.pixels as f64,
             edited_calibration: self.params.is_some(),
+            reference_corrected: self.correction.is_some(),
         }
     }
 }
@@ -214,6 +226,7 @@ mod tests {
             end: 11,
             next: 10,
             params: None,
+            correction: None,
             hottest: None,
             hottest_frames: Vec::new(),
             coldest: None,
@@ -264,6 +277,7 @@ mod tests {
             end: 0,
             next: 0,
             params: None,
+            correction: None,
             hottest: None,
             hottest_frames: Vec::new(),
             coldest: None,
@@ -286,6 +300,7 @@ mod tests {
             end: 0,
             next: 0,
             params: None,
+            correction: None,
             hottest: None,
             hottest_frames: Vec::new(),
             coldest: None,
@@ -304,6 +319,7 @@ mod tests {
             end: 13,
             next: 10,
             params: None,
+            correction: None,
             hottest: None,
             hottest_frames: Vec::new(),
             coldest: None,

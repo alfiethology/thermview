@@ -762,3 +762,88 @@ fn calibration_panel_preserves_stored_zero_distance() {
     assert_eq!(doc.params().distance, 0.0);
     assert_eq!(doc.image.celsius, temperatures);
 }
+
+#[test]
+fn reference_correction_follows_each_frame_and_range_measurements_match_the_view() {
+    use thermview::calibrate::{Region, Settings};
+    let mut doc = Doc::from_video(Video::open(sequence()).unwrap(), "reference.csq", None).unwrap();
+    let target = thermview::image::Params { emissivity: 0.8, ..doc.params() };
+    doc.set_params(target);
+    let mut settings = Settings {
+        region: Some(Region::between((0, 0), (1, 0))),
+        emissivity: 0.99,
+        distance: 1.0,
+        known_c: Some(25.0),
+        fixed_reference: false,
+    };
+    doc.set_reference(settings);
+    assert!(
+        doc.apply_reference(true).is_err(),
+        "video correction requires a fixed reference confirmation"
+    );
+    settings.fixed_reference = true;
+    doc.set_reference(settings);
+    doc.apply_reference(true).unwrap();
+    let first = doc.image.celsius.clone();
+    let first_max = doc.image.stats.max.celsius;
+    let first_offset = settings.reading(&doc.source).unwrap().offset_c.unwrap();
+    doc.seek(1).unwrap();
+    let second_offset = settings.reading(&doc.source).unwrap().offset_c.unwrap();
+    assert!((first_offset - second_offset).abs() > 1.0);
+    let uncorrected = doc.source.recompute(target);
+    assert!(
+        (doc.image.celsius[10] as f64 - uncorrected.celsius[10] as f64 - second_offset).abs()
+            < 1e-4
+    );
+    let max = first_max.max(doc.image.stats.max.celsius);
+    doc.measurement.mark_start(0);
+    doc.measurement.mark_end(1);
+    doc.measurement.begin(2, Some(target));
+    doc.measurement.set_reference_correction(Some(settings));
+    while doc.measurement.running() {
+        doc.measurement.advance(doc.video.as_ref().unwrap());
+    }
+    let result = doc.measurement.result.as_ref().unwrap();
+    assert!(result.reference_corrected);
+    assert_eq!(result.hottest.spot.celsius, max);
+    doc.seek(0).unwrap();
+    assert_eq!(doc.image.celsius, first);
+    doc.apply_reference(false).unwrap();
+    assert!(doc.measurement.result.is_none());
+    assert_eq!(doc.image.celsius, doc.source.recompute(target).celsius);
+}
+
+#[test]
+fn reference_history_records_failures_and_cancellation_without_changing_current_frame() {
+    use thermview::calibrate::{Region, Settings};
+    let a = frame(&[15000; 48], true);
+    let b = corrupt_frame(frame(&[15000; 48], true));
+    let video = Video::open([a.clone(), b, a].concat()).unwrap();
+    let mut doc = Doc::from_video(video, "history.csq", None).unwrap();
+    doc.set_reference(Settings {
+        region: Some(Region::between((0, 0), (2, 2))),
+        emissivity: 0.97,
+        distance: 1.0,
+        known_c: Some(20.0),
+        fixed_reference: true,
+    });
+    let original = doc.image.celsius.clone();
+    doc.calibration.begin(3, None);
+    while doc.calibration.running() {
+        doc.calibration.advance(doc.video.as_ref().unwrap());
+    }
+    assert!(doc.calibration.complete);
+    assert_eq!(doc.calibration.samples.len(), 3);
+    assert!(doc.calibration.samples[1].reading.is_err());
+    assert!(doc.calibration.samples[2].reading.is_ok());
+    assert_eq!(doc.video.as_ref().unwrap().current, 0);
+    assert_eq!(doc.image.celsius, original);
+    assert!(!doc.calibration.applied);
+    let csv = doc.calibration.csv();
+    assert_eq!(csv.lines().count(), 4);
+    assert!(csv.contains("JPEG-LS"));
+    doc.calibration.begin(3, None);
+    doc.calibration.cancel();
+    assert!(!doc.calibration.running());
+    assert!(!doc.calibration.complete);
+}
