@@ -1,4 +1,4 @@
-use crate::calibrate::{Region, Sample};
+use crate::calibrate::{Region, Sample, Scope};
 use crate::doc::Doc;
 use egui::{Color32, Sense, Stroke, Ui, pos2, vec2};
 use egui_bench::prelude::*;
@@ -11,6 +11,38 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, path: Option<&std::path::Path>) {
         );
         return;
     }
+    section(ui, "run on", "correction and reference check", |ui| {
+        let mut scope = doc.calibration.scope;
+        ui.radio_value(&mut scope, Scope::CurrentFrame, "Current frame");
+        ui.add_enabled_ui(doc.video.is_some(), |ui| {
+            ui.radio_value(&mut scope, Scope::SelectedRange, "Selected range from Measure");
+        });
+        doc.set_reference_scope(scope);
+        match doc.reference_scope() {
+            Ok((start, end)) => reading(
+                ui,
+                "chosen frames",
+                if start == end {
+                    format!("frame {}", start + 1)
+                } else {
+                    format!("{} to {} (inclusive)", start + 1, end + 1)
+                },
+            ),
+            Err(e) => note(ui, &e, FAULT),
+        }
+        if scope == Scope::CurrentFrame {
+            hint(
+                ui,
+                "Select the tape on this frame. The correction stays attached to this frame when you scrub; tape movement in other frames does not matter.",
+            );
+        } else {
+            hint(
+                ui,
+                "Uses the I / O marks in Measure. Each frame gets its own reference offset; the patch must stay at the selected pixels within this range.",
+            );
+        }
+    });
+    ui.add_space(8.0);
     let mut settings = doc.calibration.settings;
     let unit = doc.unit;
     section(ui, "reference patch", "separate from target settings", |ui| {
@@ -93,8 +125,8 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, path: Option<&std::path::Path>) {
                 "Emissivity alone supports a reference reading, not an independent temperature correction.",
             );
         }
-        if doc.video.is_some() {
-            ui.checkbox(&mut settings.fixed_reference, "Patch stays at these pixels and its known temperature stays constant throughout the video");
+        if doc.video.is_some() && doc.calibration.scope == Scope::SelectedRange {
+            ui.checkbox(&mut settings.fixed_reference, "Patch stays at these pixels and its known temperature stays constant throughout the selected range");
             hint(
                 ui,
                 "No automatic tracking. If the camera or reference moves, remove the correction and select the patch again.",
@@ -140,12 +172,15 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, path: Option<&std::path::Path>) {
             Err(e) => hint(ui, e),
         }
         let mut enabled = doc.calibration.applied;
+        let scope = doc.reference_scope();
         let allowed = current.as_ref().is_ok_and(|v| v.offset_c.is_some())
-            && (doc.video.is_none() || doc.calibration.settings.fixed_reference);
+            && scope
+                .as_ref()
+                .is_ok_and(|(start, end)| start == end || doc.calibration.settings.fixed_reference);
         if ui
             .add_enabled(
                 allowed || enabled,
-                egui::Checkbox::new(&mut enabled, "Apply per-frame additive correction"),
+                egui::Checkbox::new(&mut enabled, "Apply correction to chosen frames"),
             )
             .changed()
         {
@@ -153,12 +188,27 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, path: Option<&std::path::Path>) {
                 doc.calibration.error = Some(e);
             }
         }
-        if doc.calibration.applied {
-            note(
+        if let Some(correction) = doc.calibration.correction() {
+            reading(
                 ui,
-                "REFERENCE CORRECTION ACTIVE: displayed readings, measurements and image exports include the offset.",
-                READOUT,
+                "correction frames",
+                format!("{} to {}", correction.start + 1, correction.end + 1),
             );
+            if correction.contains(doc.current_frame()) {
+                note(
+                    ui,
+                    "REFERENCE CORRECTION ACTIVE ON THIS FRAME: readings, measurements and exports include the offset.",
+                    READOUT,
+                );
+            } else {
+                note(ui, "This frame is outside the applied scope and is uncorrected.", VALUE);
+            }
+            if scope.as_ref().is_ok_and(|r| *r != (correction.start, correction.end)) {
+                hint(
+                    ui,
+                    "Applied frames stay fixed when you scrub or change Measure marks. Disable and enable correction to apply it to the newly chosen frames.",
+                );
+            }
         }
         hint(
             ui,
@@ -166,108 +216,101 @@ pub fn show(ui: &mut Ui, doc: &mut Doc, path: Option<&std::path::Path>) {
         );
     });
     ui.add_space(8.0);
-    section(
-        ui,
-        "reference history",
-        if doc.video.is_some() { "all video frames" } else { "this image" },
-        |ui| {
-            ui.horizontal(|ui| {
-                if doc.calibration.running() {
-                    if ui.add(Key::new("cancel check").outline(FAULT)).clicked() {
-                        doc.calibration.cancel();
-                    }
-                } else if ui
-                    .add_enabled(current.is_ok(), Key::new("check reference").solid(READOUT))
-                    .clicked()
-                {
-                    if let Some(video) = &mut doc.video {
-                        video.playing = false;
-                        let params =
-                            (doc.image.params != doc.source.params).then_some(doc.image.params);
-                        doc.calibration.begin(video.len(), params);
-                    } else {
-                        doc.calibration.invalidate_report();
-                        doc.calibration.samples.push(Sample {
-                            frame: 0,
-                            reading: current.clone(),
-                            target: doc.params(),
-                        });
-                        doc.calibration.complete = true;
-                    }
-                    ui.ctx().request_repaint();
+    section(ui, "reference history", "chosen frames", |ui| {
+        ui.horizontal(|ui| {
+            if doc.calibration.running() {
+                if ui.add(Key::new("cancel check").outline(FAULT)).clicked() {
+                    doc.calibration.cancel();
                 }
-            });
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        !doc.calibration.samples.is_empty(),
-                        Key::new("export reference csv").outline(VALUE),
-                    )
-                    .clicked()
-                {
-                    let stem = doc.name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&doc.name);
-                    match crate::host::save(
-                        path,
-                        &format!("{stem}-reference.csv"),
-                        doc.calibration.csv().as_bytes(),
-                    ) {
-                        Ok(message) => doc.calibration.notice = Some(message),
-                        Err(e) => doc.calibration.error = Some(e),
+            } else if ui
+                .add_enabled(
+                    current.is_ok() && doc.reference_scope().is_ok(),
+                    Key::new("check reference").solid(READOUT),
+                )
+                .clicked()
+            {
+                let bounds = doc.reference_scope();
+                if let Some(video) = &mut doc.video {
+                    video.playing = false;
+                    let params =
+                        (doc.image.params != doc.source.params).then_some(doc.image.params);
+                    if let Ok((start, end)) = bounds {
+                        doc.calibration.begin_range(start, end, video.len(), params);
                     }
+                } else {
+                    doc.calibration.invalidate_report();
+                    doc.calibration.samples.push(Sample {
+                        frame: 0,
+                        reading: current.clone(),
+                        target: doc.params(),
+                    });
+                    doc.calibration.complete = true;
+                    doc.calibration.report_range = Some((0, 0));
                 }
-            });
-            if let Some((done, total)) = doc.calibration.progress() {
-                ui.add(
-                    egui::ProgressBar::new(done as f32 / total.max(1) as f32)
-                        .text(format!("{done} / {total} frames")),
-                );
+                ui.ctx().request_repaint();
             }
-            let valid = doc.calibration.samples.iter().filter(|s| s.reading.is_ok()).count();
-            if !doc.calibration.samples.is_empty() {
-                reading(
-                    ui,
-                    "valid / checked",
-                    format!("{valid} / {}", doc.calibration.samples.len()),
-                );
-                if !doc.calibration.complete {
-                    note(ui, "Incomplete analysis; history covers checked frames only.", FAULT);
+        });
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    !doc.calibration.samples.is_empty(),
+                    Key::new("export reference csv").outline(VALUE),
+                )
+                .clicked()
+            {
+                let stem = doc.name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&doc.name);
+                match crate::host::save(
+                    path,
+                    &format!("{stem}-reference.csv"),
+                    doc.calibration.csv().as_bytes(),
+                ) {
+                    Ok(message) => doc.calibration.notice = Some(message),
+                    Err(e) => doc.calibration.error = Some(e),
                 }
-                if valid < doc.calibration.samples.len() {
-                    note(ui, "Some frames failed. Gaps are not interpolated or corrected.", FAULT);
-                }
-                history(
-                    ui,
-                    &doc.calibration.samples,
-                    unit,
-                    doc.calibration.settings.known_c.is_some(),
-                );
-                egui::CollapsingHeader::new("Per-frame readings and failures").show(ui, |ui| {
-                    egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
-                        for sample in &doc.calibration.samples {
-                            match &sample.reading {
-                                Ok(v) => {
-                                    ui.label(format!(
-                                        "Frame {}: {}{}",
-                                        sample.frame + 1,
-                                        unit.reading(v.mean_c as f32),
-                                        v.offset_c
-                                            .map(|o| format!(", offset {}", delta(unit, o)))
-                                            .unwrap_or_default()
-                                    ));
-                                }
-                                Err(e) => {
-                                    ui.colored_label(
-                                        FAULT,
-                                        format!("Frame {}: {e}", sample.frame + 1),
-                                    );
-                                }
+            }
+        });
+        if let Some((done, total)) = doc.calibration.progress() {
+            ui.add(
+                egui::ProgressBar::new(done as f32 / total.max(1) as f32)
+                    .text(format!("{done} / {total} frames")),
+            );
+        }
+        let valid = doc.calibration.samples.iter().filter(|s| s.reading.is_ok()).count();
+        if !doc.calibration.samples.is_empty() {
+            if let Some((start, end)) = doc.calibration.report_range {
+                reading(ui, "report frames", format!("{} to {}", start + 1, end + 1));
+            }
+            reading(ui, "valid / checked", format!("{valid} / {}", doc.calibration.samples.len()));
+            if !doc.calibration.complete {
+                note(ui, "Incomplete analysis; history covers checked frames only.", FAULT);
+            }
+            if valid < doc.calibration.samples.len() {
+                note(ui, "Some frames failed. Gaps are not interpolated or corrected.", FAULT);
+            }
+            history(ui, &doc.calibration.samples, unit, doc.calibration.settings.known_c.is_some());
+            egui::CollapsingHeader::new("Per-frame readings and failures").show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+                    for sample in &doc.calibration.samples {
+                        match &sample.reading {
+                            Ok(v) => {
+                                ui.label(format!(
+                                    "Frame {}: {}{}",
+                                    sample.frame + 1,
+                                    unit.reading(v.mean_c as f32),
+                                    v.offset_c
+                                        .map(|o| format!(", offset {}", delta(unit, o)))
+                                        .unwrap_or_default()
+                                ));
+                            }
+                            Err(e) => {
+                                ui.colored_label(FAULT, format!("Frame {}: {e}", sample.frame + 1));
                             }
                         }
-                    });
+                    }
                 });
-            }
-        },
-    );
+            });
+        }
+    });
     if let Some(e) = &doc.calibration.error {
         note(ui, e, FAULT);
     }
@@ -305,12 +348,13 @@ fn history(ui: &mut Ui, samples: &[Sample], unit: crate::palette::Unit, error: b
     let bottom = if error { lo.min(0.0) } else { lo - 0.005 };
     let top = if error { hi.max(0.0) } else { hi + 0.005 };
     let span = (top - bottom).max(0.01);
-    let n = samples.last().map_or(1, |s| s.frame).max(1) as f32;
+    let first = samples.first().map_or(0, |s| s.frame);
+    let n = samples.last().map_or(0, |s| s.frame).saturating_sub(first).max(1) as f32;
     let mut previous = None;
     for sample in samples {
         if let Some(v) = value(sample) {
             let at = pos2(
-                plot.left() + sample.frame as f32 / n * plot.width(),
+                plot.left() + (sample.frame - first) as f32 / n * plot.width(),
                 plot.bottom() - ((v - bottom) / span) as f32 * plot.height(),
             );
             if let Some(from) = previous {
@@ -323,7 +367,8 @@ fn history(ui: &mut Ui, samples: &[Sample], unit: crate::palette::Unit, error: b
         }
     }
     ui.label(format!(
-        "Frames 1–{} · fixed pixel coordinates",
+        "Frames {}–{} · fixed pixel coordinates",
+        first + 1,
         samples.last().map_or(1, |s| s.frame + 1)
     ));
 }

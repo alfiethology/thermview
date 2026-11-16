@@ -18,6 +18,38 @@ impl Region {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Scope {
+    #[default]
+    CurrentFrame,
+    SelectedRange,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Correction {
+    pub settings: Settings,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Correction {
+    pub fn contains(&self, frame: usize) -> bool {
+        (self.start..=self.end).contains(&frame)
+    }
+    pub fn correct(
+        &self,
+        frame: usize,
+        source: &ThermalImage,
+        target: &mut ThermalImage,
+    ) -> Result<bool, String> {
+        if !self.contains(frame) {
+            return Ok(false);
+        }
+        self.settings.correct(source, target)?;
+        Ok(true)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
     pub region: Option<Region>,
@@ -120,6 +152,9 @@ pub struct Sample {
 pub struct Calibration {
     pub settings: Settings,
     pub applied: bool,
+    pub scope: Scope,
+    pub applied_range: Option<(usize, usize)>,
+    pub report_range: Option<(usize, usize)>,
     pub selecting: bool,
     pub drag_start: Option<(usize, usize)>,
     pub samples: Vec<Sample>,
@@ -130,8 +165,9 @@ pub struct Calibration {
 }
 
 struct Job {
+    start: usize,
     next: usize,
-    total: usize,
+    end: usize,
     settings: Settings,
     target: Option<Params>,
 }
@@ -147,6 +183,9 @@ impl Calibration {
                 fixed_reference: false,
             },
             applied: false,
+            scope: Scope::CurrentFrame,
+            applied_range: None,
+            report_range: None,
             selecting: false,
             drag_start: None,
             samples: Vec::new(),
@@ -160,6 +199,7 @@ impl Calibration {
         self.samples.clear();
         self.job = None;
         self.complete = false;
+        self.report_range = None;
         self.error = None;
         self.notice = None;
     }
@@ -167,11 +207,26 @@ impl Calibration {
         self.job.is_some()
     }
     pub fn progress(&self) -> Option<(usize, usize)> {
-        self.job.as_ref().map(|j| (j.next, j.total))
+        self.job.as_ref().map(|j| (j.next - j.start, j.end - j.start + 1))
     }
     pub fn begin(&mut self, total: usize, target: Option<Params>) {
+        self.begin_range(0, total.saturating_sub(1), total, target);
+    }
+    pub fn begin_range(&mut self, start: usize, end: usize, total: usize, target: Option<Params>) {
         self.invalidate_report();
-        self.job = Some(Job { next: 0, total, settings: self.settings, target });
+        if start > end || end >= total {
+            self.error = Some("Choose a valid frame or mark a valid range in Measure.".into());
+            return;
+        }
+        self.report_range = Some((start, end));
+        self.job = Some(Job { start, next: start, end, settings: self.settings, target });
+    }
+    pub fn correction(&self) -> Option<Correction> {
+        let (start, end) = self.applied_range.filter(|_| self.applied)?;
+        Some(Correction { settings: self.settings, start, end })
+    }
+    pub fn applies_to(&self, frame: usize) -> bool {
+        self.correction().is_some_and(|c| c.contains(frame))
     }
     pub fn cancel(&mut self) {
         self.job = None;
@@ -184,7 +239,7 @@ impl Calibration {
         #[cfg(not(target_arch = "wasm32"))]
         let started = std::time::Instant::now();
         for _ in 0..4 {
-            if job.next >= job.total {
+            if job.next > job.end {
                 self.complete = true;
                 return;
             }
@@ -199,7 +254,7 @@ impl Calibration {
                 break;
             }
         }
-        if job.next == job.total {
+        if job.next > job.end {
             self.complete = true;
         } else {
             self.job = Some(job);
@@ -209,7 +264,7 @@ impl Calibration {
         let s = self.settings;
         let r = s.region.unwrap_or(Region::between((0, 0), (0, 0)));
         let mut csv = String::from(
-            "version,frame_one_based,x0_zero_based,y0_zero_based,x1_zero_based,y1_zero_based,reference_emissivity,reference_distance_m,known_temperature_c,fixed_reference_confirmed,correction_applied,analysis_complete,valid_pixels,reference_mean_c,reference_min_c,reference_max_c,suggested_offset_c,target_emissivity,target_distance_m,error\n",
+            "version,frame_one_based,x0_zero_based,y0_zero_based,x1_zero_based,y1_zero_based,reference_emissivity,reference_distance_m,known_temperature_c,fixed_reference_confirmed,correction_applied,analysis_complete,valid_pixels,reference_mean_c,reference_min_c,reference_max_c,suggested_offset_c,target_emissivity,target_distance_m,scope,scope_start_frame,scope_end_frame,correction_start_frame,correction_end_frame,error\n",
         );
         for sample in &self.samples {
             let (pixels, mean, min, max, offset, error) = match &sample.reading {
@@ -231,7 +286,7 @@ impl Calibration {
                 ),
             };
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"\n",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},\"{}\"\n",
                 env!("CARGO_PKG_VERSION"),
                 sample.frame + 1,
                 r.x0,
@@ -242,7 +297,7 @@ impl Calibration {
                 s.distance,
                 s.known_c.map(|t| t.to_string()).unwrap_or_default(),
                 s.fixed_reference,
-                self.applied && sample.reading.is_ok(),
+                self.applies_to(sample.frame) && sample.reading.is_ok(),
                 self.complete,
                 pixels,
                 mean,
@@ -259,6 +314,17 @@ impl Calibration {
                 } else {
                     String::new()
                 },
+                if self.scope == Scope::CurrentFrame { "current_frame" } else { "selected_range" },
+                self.report_range.map(|r| (r.0 + 1).to_string()).unwrap_or_default(),
+                self.report_range.map(|r| (r.1 + 1).to_string()).unwrap_or_default(),
+                self.applied_range
+                    .filter(|_| self.applied)
+                    .map(|r| (r.0 + 1).to_string())
+                    .unwrap_or_default(),
+                self.applied_range
+                    .filter(|_| self.applied)
+                    .map(|r| (r.1 + 1).to_string())
+                    .unwrap_or_default(),
                 error
             ));
         }

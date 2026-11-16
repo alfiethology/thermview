@@ -90,8 +90,8 @@ impl Doc {
         let params = self.image.params;
         let adjusted = params != self.source.params;
         let mut image = if adjusted { source.recompute(params) } else { source.clone() };
-        if self.calibration.applied {
-            self.calibration.settings.correct(&source, &mut image).map_err(crate::Error::new)?;
+        if let Some(correction) = self.calibration.correction() {
+            correction.correct(index, &source, &mut image).map_err(crate::Error::new)?;
         }
         self.image = image;
         self.source = source;
@@ -116,8 +116,10 @@ impl Doc {
             self.measurement.invalidate();
             self.calibration.invalidate_report();
             self.image = self.source.recompute(params);
-            if self.calibration.applied {
-                if let Err(e) = self.calibration.settings.correct(&self.source, &mut self.image) {
+            if let Some(correction) = self.calibration.correction() {
+                if let Err(e) =
+                    correction.correct(self.current_frame(), &self.source, &mut self.image)
+                {
                     self.calibration.applied = false;
                     self.calibration.error = Some(e);
                 }
@@ -135,9 +137,42 @@ impl Doc {
         }
     }
 
+    pub fn current_frame(&self) -> usize {
+        self.video.as_ref().map_or(0, |v| v.current)
+    }
+
+    pub fn reference_scope(&self) -> Result<(usize, usize), String> {
+        if self.video.is_none() || self.calibration.scope == crate::calibrate::Scope::CurrentFrame {
+            let frame = self.current_frame();
+            return Ok((frame, frame));
+        }
+        let (Some(start), Some(end)) = (self.measurement.start, self.measurement.end) else {
+            return Err("Mark start and end frames in Measure first.".into());
+        };
+        if start > end || end >= self.video.as_ref().unwrap().len() {
+            return Err("The selected Measure range is invalid. Re-mark start and end.".into());
+        }
+        Ok((start, end))
+    }
+
+    pub fn set_reference_scope(&mut self, scope: crate::calibrate::Scope) {
+        if scope != self.calibration.scope {
+            self.calibration.scope = scope;
+            self.calibration.settings.fixed_reference = false;
+            self.calibration.invalidate_report();
+            let _ = self.apply_reference(false);
+        }
+    }
+
     pub fn apply_reference(&mut self, enabled: bool) -> Result<(), String> {
-        if enabled && self.video.is_some() && !self.calibration.settings.fixed_reference {
-            return Err("Confirm the reference stays at these coordinates and at the known temperature throughout the video.".into());
+        let range = if enabled { Some(self.reference_scope()?) } else { None };
+        if let Some((start, end)) = range {
+            if start != end && !self.calibration.settings.fixed_reference {
+                return Err("Confirm the reference stays at these pixels and at the known temperature throughout the selected range.".into());
+            }
+            if self.calibration.settings.reading(&self.source)?.offset_c.is_none() {
+                return Err("Enter an independently known reference temperature before applying a correction.".into());
+            }
         }
         let params = self.image.params;
         let mut image = if params != self.source.params {
@@ -145,11 +180,13 @@ impl Doc {
         } else {
             self.source.clone()
         };
-        if enabled {
-            self.calibration.settings.correct(&self.source, &mut image)?;
+        if let Some((start, end)) = range {
+            crate::calibrate::Correction { settings: self.calibration.settings, start, end }
+                .correct(self.current_frame(), &self.source, &mut image)?;
         }
         self.image = image;
         self.calibration.applied = enabled;
+        self.calibration.applied_range = range;
         if self.video.as_ref().is_none_or(|v| v.auto_range) {
             self.auto_range();
         }

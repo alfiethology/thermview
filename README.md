@@ -266,7 +266,10 @@ The fourth left-hand tab, **Calibrate**, checks a reference independently of the
 target surface (for example, tape and an animal's eye can use different emissivities).
 This requires a FLIR image or CSQ video with retained raw sensor counts.
 
-1. Choose **Select reference**, then click one pixel or drag an area fully inside
+1. Under **Run on**, choose **Current frame** (the default) or **Selected range
+   from Measure**. For a range, mark start and end using I / O in Measure first;
+   both endpoints are included. Mark the first and last video frames to use the
+   whole video. Choose **Select reference**, then click one pixel or drag an area fully inside
    the reference patch. A yellow **REF** outline marks the selection. Selection
    pauses playback and does not add a target measurement point.
 2. Enter the **Reference emissivity** and **Reference distance**. Other reference
@@ -277,20 +280,33 @@ This requires a FLIR image or CSQ video with retained raw sensor counts.
    temperature measured independently, for example with an appropriate calibrated
    contact sensor. Knowing emissivity alone does not provide a known temperature.
 4. Press **Check reference** to calculate the patch's mean, minimum and maximum
-   for each video frame (or the current still image). The plot shows measured
+   for the chosen frame or each frame in the selected range. The plot shows measured
    minus known temperature, or the reference temperature when no known value is
    supplied. Analysis is cancellable, retains failures as gaps and does not move
    the displayed frame. **Export reference CSV** records settings, original
-   reference readings, suggested offsets, correction status and failures. CSV
+   reference readings, suggested offsets, correction status, chosen and applied
+   frame bounds, and failures. CSV
    temperatures are always Celsius; frame numbers are one-based and pixel
    coordinates zero-based.
 
-**Apply per-frame additive correction** is optional and starts off. For a video,
-you must confirm that the patch remains at the selected pixel coordinates and
-that its independently known temperature remains constant throughout recording.
-There is no automatic tracking or variable-temperature reference input. If the
-camera or patch moves, disable correction and reposition the selection; do not
-apply a single fixed selection across a recording where that condition is false.
+**Apply correction to chosen frames** is optional and starts off. In **Current
+frame** mode, select the tape on the frame of interest and apply the correction
+there. No fixed-reference confirmation is required: the tape may move elsewhere
+in the recording. The correction stays attached to that frame number when you
+scrub; other frames remain uncorrected.
+
+In **Selected range from Measure** mode, a range containing multiple frames
+requires confirmation that the patch remains at the selected pixel coordinates
+and its independently known temperature remains constant **within that range**.
+Each included frame gets its own reference offset. There is no automatic tracking
+or variable-temperature reference input. If the tape moves within the range,
+use current-frame mode instead.
+
+Applied frame bounds are captured when correction is enabled. Scrubbing or
+changing Measure marks does not silently move or extend them. The panel shows
+the applied bounds and identifies frames outside them as uncorrected. Disable
+and enable correction to apply it to newly chosen frames; changing scope removes
+the old correction and clears the reference history.
 
 For each frame, the offset is `known reference temperature − mean reference
 reading`. That offset is added to valid target temperatures **after** conversion
@@ -300,11 +316,14 @@ change the reference reading. The patch's separately calculated reading may
 therefore differ from a target spot placed over that patch.
 
 When enabled, correction applies to the displayed temperatures, point readings,
-range measurements and image exports. Corrected images carry a **REFERENCE
+range measurements and image exports, only inside the applied frame bounds.
+Range summaries report how many analysed frames were corrected, so an analysis
+spanning corrected and uncorrected frames is explicit. Corrected images carry a **REFERENCE
 OFFSET** label even if ordinary information overlays are hidden. Unreadable
 frames or invalid reference areas have no correction; corrected playback reports
-an error instead of silently displaying that frame without correction, and range
-analysis skips it and reports the failure. Disable the correction to restore
+an error instead of silently displaying an in-scope frame without correction,
+and range analysis skips it and reports the failure. Outside the correction
+scope, a missing reference does not prevent uncorrected playback or measurements. Disable the correction to restore
 uncorrected target readings. Editing reference settings removes the correction
 and clears its history; target edits retain the correction but clear old history
 and range results. Opening another file resets the reference. Reference settings

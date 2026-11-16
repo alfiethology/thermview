@@ -50,7 +50,7 @@ pub fn paint(p: &Painter, rect: Rect, doc: &Doc) {
         p.rect_stroke(area, 0.0, Stroke::new(1.5, Color32::YELLOW), StrokeKind::Inside);
         p.text(area.left_top(), Align2::LEFT_BOTTOM, "REF", figure(fs), Color32::YELLOW);
     }
-    if doc.calibration.applied {
+    if doc.calibration.applies_to(doc.current_frame()) {
         let offset = doc
             .calibration
             .settings

@@ -7,9 +7,10 @@ All notable changes to thermview are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- Current-frame and selected-Measure-range scopes for reference checks and corrections. Frame-only correction allows moving references elsewhere in the video; inclusive range bounds are captured on application and recorded in CSV reports. Range statistics count corrected frames and exports label only in-scope frames.
 - Fourth Calibrate tab with point/area reference selection, independent reference emissivity and distance, and an optional independently known surface temperature.
 - Cancellable video reference history, per-frame error plot and CSV audit report with failures and original reference readings.
-- Explicit optional per-frame additive target correction, kept separate from reference emissivity, reversible from retained raw counts, and included in range measurements and labelled image exports. Fixed-position, constant-temperature confirmation is required for video correction.
+- Explicit optional per-frame additive target correction, kept separate from reference emissivity, reversible from retained raw counts, and included in range measurements and labelled image exports. Fixed-position, constant-temperature confirmation is required for multi-frame range correction.
 
 ## [0.2.0] - 2026-11-15
 

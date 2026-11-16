@@ -776,10 +776,13 @@ fn reference_correction_follows_each_frame_and_range_measurements_match_the_view
         known_c: Some(25.0),
         fixed_reference: false,
     };
+    doc.measurement.mark_start(0);
+    doc.measurement.mark_end(1);
+    doc.set_reference_scope(thermview::calibrate::Scope::SelectedRange);
     doc.set_reference(settings);
     assert!(
         doc.apply_reference(true).is_err(),
-        "video correction requires a fixed reference confirmation"
+        "range correction requires a fixed reference confirmation"
     );
     settings.fixed_reference = true;
     doc.set_reference(settings);
@@ -799,7 +802,7 @@ fn reference_correction_follows_each_frame_and_range_measurements_match_the_view
     doc.measurement.mark_start(0);
     doc.measurement.mark_end(1);
     doc.measurement.begin(2, Some(target));
-    doc.measurement.set_reference_correction(Some(settings));
+    doc.measurement.set_reference_correction(doc.calibration.correction());
     while doc.measurement.running() {
         doc.measurement.advance(doc.video.as_ref().unwrap());
     }
@@ -846,4 +849,182 @@ fn reference_history_records_failures_and_cancellation_without_changing_current_
     doc.calibration.cancel();
     assert!(!doc.calibration.running());
     assert!(!doc.calibration.complete);
+}
+
+fn scoped_reference() -> thermview::calibrate::Settings {
+    thermview::calibrate::Settings {
+        region: Some(thermview::calibrate::Region::between((0, 0), (0, 0))),
+        emissivity: 0.99,
+        distance: 1.0,
+        known_c: Some(25.0),
+        fixed_reference: false,
+    }
+}
+
+fn scope_video() -> Video {
+    Video::open(
+        [
+            frame(&[15000; 48], true),
+            frame(&[16000; 48], true),
+            frame(&[17000; 48], true),
+            frame(&[18000; 48], true),
+        ]
+        .concat(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn current_frame_correction_needs_no_fixed_patch_and_does_not_leak_when_scrubbing() {
+    let mut doc = Doc::from_video(scope_video(), "moving.csq", None).unwrap();
+    doc.seek(1).unwrap();
+    let original = doc.image.celsius.clone();
+    let mut settings = scoped_reference();
+    settings.known_c = Some(settings.reading(&doc.source).unwrap().mean_c + 2.0);
+    doc.set_reference(settings);
+    doc.apply_reference(true).unwrap();
+    assert_eq!(doc.calibration.applied_range, Some((1, 1)));
+    assert!((doc.image.celsius[10] - original[10] - 2.0).abs() < 1e-4);
+    doc.seek(2).unwrap();
+    assert_eq!(doc.image.celsius, doc.source.celsius);
+    assert!(!doc.calibration.applies_to(2));
+    doc.seek(0).unwrap();
+    assert_eq!(doc.image.celsius, doc.source.celsius);
+    doc.seek(1).unwrap();
+    assert!((doc.image.celsius[10] - original[10] - 2.0).abs() < 1e-4);
+
+    doc.measurement.mark_start(0);
+    doc.measurement.mark_end(3);
+    doc.measurement.begin(4, None);
+    doc.measurement.set_reference_correction(doc.calibration.correction());
+    while doc.measurement.running() {
+        doc.measurement.advance(doc.video.as_ref().unwrap());
+    }
+    let summary = doc.measurement.result.as_ref().unwrap();
+    assert_eq!(summary.corrected_frames, 1);
+    let original_mean: f64 = (0..4)
+        .map(|i| doc.video.as_ref().unwrap().frame(i).unwrap().celsius[0] as f64)
+        .sum::<f64>()
+        / 4.0;
+    assert!((summary.mean - original_mean - 0.5).abs() < 1e-4);
+    let mut h = Harness::new(1500.0, 1100.0);
+    h.app.doc = Some(doc);
+    h.settle();
+    assert!(h.texts().iter().any(|(text, _)| text.starts_with("REFERENCE OFFSET")));
+    h.app.doc.as_mut().unwrap().seek(3).unwrap();
+    h.settle();
+    assert!(!h.texts().iter().any(|(text, _)| text.starts_with("REFERENCE OFFSET")));
+}
+
+#[test]
+fn selected_range_is_inclusive_frozen_and_used_by_reports_and_measurements() {
+    use thermview::calibrate::Scope;
+    let mut doc = Doc::from_video(scope_video(), "range.csq", None).unwrap();
+    doc.measurement.mark_start(1);
+    doc.measurement.mark_end(2);
+    doc.set_reference_scope(Scope::SelectedRange);
+    doc.set_reference(scoped_reference());
+    assert!(doc.apply_reference(true).is_err());
+    let mut settings = scoped_reference();
+    settings.fixed_reference = true;
+    doc.set_reference(settings);
+    doc.apply_reference(true).unwrap();
+    assert_eq!(doc.calibration.applied_range, Some((1, 2)));
+    assert_eq!(doc.image.celsius, doc.source.celsius, "outside selected range");
+    for index in 1..=2 {
+        doc.seek(index).unwrap();
+        let offset = settings.reading(&doc.source).unwrap().offset_c.unwrap();
+        assert!((doc.image.celsius[0] as f64 - doc.source.celsius[0] as f64 - offset).abs() < 1e-4);
+    }
+    doc.seek(3).unwrap();
+    assert_eq!(doc.image.celsius, doc.source.celsius);
+    doc.measurement.mark_start(0);
+    doc.measurement.mark_end(3);
+    assert_eq!(
+        doc.calibration.applied_range,
+        Some((1, 2)),
+        "moving marks must not extend correction"
+    );
+    doc.measurement.begin(4, None);
+    doc.measurement.set_reference_correction(doc.calibration.correction());
+    while doc.measurement.running() {
+        doc.measurement.advance(doc.video.as_ref().unwrap());
+    }
+    assert_eq!(doc.measurement.result.as_ref().unwrap().corrected_frames, 2);
+    doc.calibration.begin_range(1, 2, 4, None);
+    assert_eq!(doc.calibration.progress(), Some((0, 2)));
+    while doc.calibration.running() {
+        doc.calibration.advance(doc.video.as_ref().unwrap());
+    }
+    assert_eq!(doc.calibration.samples.iter().map(|s| s.frame).collect::<Vec<_>>(), vec![1, 2]);
+    assert!(doc.calibration.complete);
+    let csv = doc.calibration.csv();
+    for line in csv.lines().skip(1) {
+        let cells: Vec<_> = line.split(',').collect();
+        assert_eq!(cells.len(), 25);
+        assert_eq!(cells[10], "true");
+        assert_eq!(&cells[19..24], &["selected_range", "2", "3", "2", "3"]);
+    }
+    doc.apply_reference(false).unwrap();
+    assert!(doc.calibration.applied_range.is_none());
+}
+
+#[test]
+fn invalid_measure_ranges_are_rejected_but_single_frame_range_needs_no_fixed_reference() {
+    use thermview::calibrate::Scope;
+    let mut doc = Doc::from_video(scope_video(), "range.csq", None).unwrap();
+    doc.set_reference_scope(Scope::SelectedRange);
+    doc.set_reference(scoped_reference());
+    assert!(doc.apply_reference(true).is_err());
+    doc.measurement.mark_start(2);
+    doc.measurement.mark_end(1);
+    assert!(doc.reference_scope().is_err());
+    doc.measurement.mark_end(8);
+    assert!(doc.reference_scope().is_err());
+    doc.measurement.mark_start(0);
+    doc.measurement.mark_end(0);
+    doc.apply_reference(true).unwrap();
+    assert_eq!(doc.calibration.applied_range, Some((0, 0)));
+    doc.set_reference_scope(Scope::CurrentFrame);
+    assert!(!doc.calibration.applied);
+    assert_eq!(doc.image.celsius, doc.source.celsius);
+    doc.calibration.begin_range(3, 1, 4, None);
+    assert!(!doc.calibration.running());
+    assert!(doc.calibration.error.is_some());
+}
+
+#[test]
+fn scope_controls_check_current_frame_or_measure_range_in_the_rendered_ui() {
+    use thermview::calibrate::Scope;
+    let mut h = Harness::new(1500.0, 1600.0);
+    let mut doc = Doc::from_video(scope_video(), "scope-ui.csq", None).unwrap();
+    doc.set_reference(scoped_reference());
+    doc.measurement.mark_start(1);
+    doc.measurement.mark_end(2);
+    h.app.doc = Some(doc);
+    h.settle();
+    h.click(h.find("CALIBRATE").unwrap().center());
+    h.click(h.find("Selected range from Measure").unwrap().center());
+    assert_eq!(h.app.doc.as_ref().unwrap().calibration.scope, Scope::SelectedRange);
+    h.click(h.find("CHECK REFERENCE").unwrap().center());
+    h.settle();
+    assert_eq!(
+        h.app.doc.as_ref().unwrap().calibration.samples.iter().map(|s| s.frame).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    std::fs::write(std::env::temp_dir().join("thermview-calibration-range-preview.png"), h.png())
+        .unwrap();
+    h.click(h.find("Current frame").unwrap().center());
+    h.app.doc.as_mut().unwrap().seek(2).unwrap();
+    h.settle();
+    h.click(h.find("CHECK REFERENCE").unwrap().center());
+    h.settle();
+    assert_eq!(
+        h.app.doc.as_ref().unwrap().calibration.samples.iter().map(|s| s.frame).collect::<Vec<_>>(),
+        vec![2]
+    );
+    h.click(h.find("Apply correction to chosen frames").unwrap().center());
+    assert_eq!(h.app.doc.as_ref().unwrap().calibration.applied_range, Some((2, 2)));
+    std::fs::write(std::env::temp_dir().join("thermview-calibration-frame-preview.png"), h.png())
+        .unwrap();
 }

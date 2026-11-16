@@ -532,9 +532,7 @@ impl App {
                     let params =
                         (doc.image.params != doc.source.params).then_some(doc.image.params);
                     measurement.begin(video.len(), params);
-                    measurement.set_reference_correction(
-                        doc.calibration.applied.then_some(doc.calibration.settings),
-                    );
+                    measurement.set_reference_correction(doc.calibration.correction());
                     ui.ctx().request_repaint();
                 }
                 if ui
@@ -640,7 +638,10 @@ impl App {
             if result.reference_corrected {
                 note(
                     ui,
-                    "Includes per-frame reference offsets. Original file readings remain available with correction disabled.",
+                    &format!(
+                        "{} of {} analysed frames include reference offsets. Other frames use uncorrected readings.",
+                        result.corrected_frames, result.frames
+                    ),
                     READOUT,
                 );
             }
