@@ -130,21 +130,51 @@ fn calibrate_tab_displays_separate_settings_history_and_correction_state() {
     assert_eq!(h.app.doc.as_ref().unwrap().calibration.samples.len(), 1);
     assert!(h.app.doc.as_ref().unwrap().calibration.csv().contains("suggested_offset_c"));
     std::fs::write(std::env::temp_dir().join("thermview-calibrate-preview.png"), h.png()).unwrap();
+    let anchor = h.thermal_rect().unwrap().center();
+    h.frame(vec![
+        egui::Event::PointerMoved(anchor),
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 400.0),
+            modifiers: egui::Modifiers::CTRL,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+        },
+    ]);
+    h.settle();
+    assert!(h.app.doc.as_ref().unwrap().view.zoom > 2.0);
     h.click(h.find("SELECT REFERENCE").unwrap().center());
     let rect = h.thermal_rect().expect("thermal image bounds");
-    let pixel =
-        |x: usize, y: usize| rect.min + egui::vec2((x as f32 + 0.5) * 8.0, (y as f32 + 0.5) * 8.0);
-    h.click(pixel(20, 15));
+    let pixel = |x: usize, y: usize| {
+        rect.min
+            + egui::vec2(
+                (x as f32 + 0.5) * rect.width() / 80.0,
+                (y as f32 + 0.5) * rect.height() / 60.0,
+            )
+    };
+    h.click(pixel(35, 25));
     let doc = h.app.doc.as_ref().unwrap();
-    assert_eq!(doc.calibration.settings.region, Some(Region::between((20, 15), (20, 15))));
+    assert_eq!(doc.calibration.settings.region, Some(Region::between((35, 25), (35, 25))));
     assert!(doc.points.is_empty(), "reference selection must not create a target spot");
     h.click(h.find("SELECT REFERENCE").unwrap().center());
-    h.drag(pixel(30, 25), pixel(22, 18));
+    let view = h.app.doc.as_ref().unwrap().view;
+    h.drag(pixel(45, 35), pixel(38, 28));
+    assert_eq!(
+        h.app.doc.as_ref().unwrap().view,
+        view,
+        "selecting a reference must not pan the zoomed image"
+    );
     let doc = h.app.doc.as_ref().unwrap();
-    assert_eq!(doc.calibration.settings.region, Some(Region::between((22, 18), (30, 25))));
+    assert_eq!(doc.calibration.settings.region, Some(Region::between((38, 28), (45, 35))));
     assert!(!doc.calibration.selecting);
     assert!(doc.points.is_empty());
+    h.app.doc.as_mut().unwrap().next_hotspot();
+    assert!(h.app.doc.as_ref().unwrap().hotspots.count().is_some());
     h.app.doc.as_mut().unwrap().apply_reference(true).unwrap();
+    assert!(
+        h.app.doc.as_ref().unwrap().hotspots.count().is_none(),
+        "correction must clear cached uncorrected hot spots"
+    );
     h.settle();
     assert!(h.texts().iter().any(|(text, _)| text.starts_with("REFERENCE OFFSET")));
     std::fs::write(std::env::temp_dir().join("thermview-calibrate-active-preview.png"), h.png())

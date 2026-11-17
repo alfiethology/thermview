@@ -55,7 +55,7 @@ comparisons remain outstanding. See the [original audit](docs/temperature-valida
 |---|---|
 | **Multi-format parsing** | Detects IRG, Hikmicro JPEG, FLIR R-JPEG, FLIR AFF and DJI R-JPEG from the bytes. Every parser returns the same `ThermalImage`, so a new format is one parser. |
 | **CSQ video (desktop)** | Open FLIR `.csq` sequences, scrub a bottom timeline, step frames and play/pause with live min/max temperatures |
-| **9 colour palettes** | Inferno, Iron, Jet, Hot, Lava, Plasma, Rainbow, Arctic, Grayscale, with inversion |
+| **9 colour palettes** | Iron (default), Inferno, Jet, Hot, Lava, Plasma, Rainbow, Arctic, Grayscale, with inversion |
 | **Colour bar** | A legend painted from the same colour function as the image, with draggable window handles, ticks in the chosen unit and the out-of-window part dimmed |
 | **Mappings** | Linear, logarithmic and histogram equalisation (1024-bin CDF, rescaled to the window) |
 | **Overscan** | clip, hide, below colour, above colour |
@@ -66,7 +66,8 @@ comparisons remain outstanding. See the [original audit](docs/temperature-valida
 | **Recalibration** | For FLIR R-JPEG, edit emissivity, distance, reflected and air temperature and humidity, and every pixel is recomputed from the raw counts |
 | **Units** | °C or °F everywhere, including the calibration fields |
 | **Scaling** | 1x to 6x nearest-neighbour |
-| **PNG export** | The scaled image with every marker and label on it, from the app or the command line |
+| **Image navigation** | Ctrl+scroll zooms around the pointer; wheel/trackpad, Shift+wheel or dragging pans the zoomed image. The view persists across video frames |
+| **PNG export** | The full image with every marker and label, independent of viewer zoom; command-line scale remains available |
 | **Metadata** | EXIF make, model, lens, software, serial, capture time and GPS |
 | **Drag and drop** | Drop a file onto the window, native or web |
 
@@ -248,15 +249,52 @@ Open or drop a `.csq` file in the desktop app. A compact timeline appears at the
 
 The zoom scroll bar below the ruler shows which part of the whole recording is visible. Drag either end inward to zoom in, outward to zoom out, or drag its middle to pan without moving the playhead. Scroll the mouse wheel over it or use **+ / −** to zoom around the playhead. **Fit** or a double-click on the zoom scroll bar shows the full recording again. The **View** label gives the visible frame range, and scrubbing the ruler selects frames within that range. Playback and frame stepping keep the current frame visible while preserving the zoom level.
 
-Min/max markers, spot readings and the temperature range update for the displayed frame. **Auto range** fits the palette to each frame; turn it off to use one temperature window across the clip. Palette, units and measurement points persist while scrubbing. Export saves the current frame with its frame number in the PNG filename.
+Min/max markers and spot readings update for the displayed frame. **Auto range** is off by default. New images/videos start with a **5–40°C** colour window, expanded immediately if the opening frame has colder or hotter pixels. As frames are viewed, the default window expands for new extrema and does not shrink back, keeping colours comparable. Deliberately editing the window or choosing a preset locks your custom bounds; enabling **Auto range** fits each frame instead. Iron is the default palette. Hottest/high readings are red and coldest/low readings blue.
+
+**Ctrl+scroll over the image** zooms around the pointer. Use the scroll wheel or a trackpad to pan, **Shift+wheel** to pan sideways, or drag the zoomed image. **Reset view** fits the whole image again. Image zoom and position persist through playback and scrubbing, so a particular region stays in view. The timeline zoom controls described above are separate and remain available. Opening another file resets the image view.
+
+Playback automatically skips unreadable frames and carries on to the next readable frame. A **skipped** count beside the transport controls shows the affected frame numbers and errors on hover. Playback ends safely if the remaining tail is unreadable. Manually seeking an unreadable frame still reports its error, and range-measurement failures remain separately documented.
+
+Palette, units and measurement points persist while scrubbing. Export saves the full current frame with its frame number in the PNG filename; viewer zoom and panning do not crop or resize the exported image.
 
 Frames are indexed once and decoded on demand. The encoded file stays in memory, but decoded rasters are only retained for the current frame. The playback rate comes from camera metadata when available; otherwise it defaults to an editable 30 fps. The ruler uses frame numbers so it remains precise when recording timing is unavailable. Compressed JPEG-LS CSQ decoding uses bundled [CharLS](https://github.com/team-charls/charls) on desktop; it is currently unavailable in the WebAssembly build. No FFmpeg or FLIR software is required.
+
+### Browse hot spots within the current frame
+
+Use **Next hottest spot** in the right-hand **Frame hot spots** panel to inspect
+another hot area without leaving the current frame. For example, a frame whose
+maximum is an ear at 38°C can also contain an eye peak at 37.8°C. This control
+lets you inspect that second peak before moving to another video frame.
+
+Browsing pauses playback and shows the selected temperature, zero-based pixel
+coordinates and spot rank. The selected peak gets a red **SPOT 2**, **SPOT 3**,
+etc. marker in the viewer and image exports. **Reset to hottest** returns to the
+frame's actual maximum and its **MAX** marker. The frame's true min/max, colour
+bar and range-measurement statistics remain unchanged.
+
+Candidates are local temperature maxima. Connected pixels with the same peak
+temperature form one plateau, represented by its first pixel in row order.
+**Spot spacing** (default **5 sensor pixels**) suppresses nearby lower-ranked
+peaks. Reduce it for closely spaced features, or increase it to skip more of a
+large hot area. Tied peaks use top-to-bottom, left-to-right order. Invalid pixels
+are excluded, and the button stops at the last candidate rather than wrapping.
+
+This is manual inspection, not automatic identification of eyes or ears. Spacing
+can hide nearby features, and local-peak browsing does not guarantee the highest
+eye temperature across a video. Click the image to measure any particular pixel
+when a feature does not appear in the candidate list.
+
+Changing frames, opening another file, recalibrating, or changing spacing resets
+browsing to the hottest spot. Palette, temperature units, colour window and zoom
+changes preserve the selection. A zoomed view recentres on the selected spot.
+Video **Measure → Next hottest** remains a separate control which ranks frames
+by their maximum temperature.
 
 ### Measure a video range
 
 Select **Measure** in the left activity bar. Scrub to the first frame and press **I** (or **Mark start**), then scrub to the last frame and press **O** (or **Mark end**). Both endpoints are included, and I/O marks appear on the timeline. Marking pauses playback. Press **Analyse range** to process every selected frame; progress and **Cancel** remain available while you use the viewer.
 
-Results show the hottest and coldest temperatures with their frame numbers and zero-based pixel locations, plus **Average max** (the mean of each frame's hottest reading), **Average min** (the mean of each frame's coldest reading), and **Overall mean** (all valid pixel temperatures across all selected frames, weighted equally per pixel). **Go to hottest/coldest** opens the corresponding frame. **Next hottest**, beside **Go to hottest**, steps through distinct frames ranked by each frame's maximum temperature, highest first. Equal maxima use chronological frame order. The hottest card shows the selected candidate's temperature, pixel location, frame and rank. The button stops at the last candidate; **Go to hottest** returns to rank 1 and restarts browsing. Range-wide extrema and averages remain unchanged. Changing the range, recalibrating, or running a new analysis resets candidate browsing. A single-frame range is valid. The time span is the first-to-last frame interval using the current playback frame rate.
+Results show the hottest and coldest temperatures with their frame numbers and zero-based pixel locations, plus **Average max** (the mean of each frame's hottest reading), **Average min** (the mean of each frame's coldest reading), and **Overall mean** (all valid pixel temperatures across all selected frames, weighted equally per pixel). **Go to hottest/coldest** opens the corresponding frame. **Next hottest** steps through distinct frames ranked by each frame's maximum temperature, highest first. **Previous hottest**, beside it, goes back one rank so you can recover after stepping too far. Equal maxima use chronological frame order. The hottest card shows the selected candidate's temperature, pixel location, frame and rank. Next stops at the last candidate and Previous stops at rank 1; neither wraps. **Go to hottest** returns directly to rank 1 and restarts browsing. Previous/Next follow temperature rank, not chronological frame order. Range-wide extrema and averages remain unchanged. Changing the range, recalibrating, or running a new analysis resets candidate browsing. A single-frame range is valid. The time span is the first-to-last frame interval using the current playback frame rate.
 
 Analysis uses each frame's recorded calibration, or your current edited calibration when recalibrated. Changing calibration or either mark clears old results; changing the palette or display unit does not. Invalid temperatures are excluded. Unreadable frames and frames with no valid readings are skipped, and analysis continues through the selected range. The result shows successfully analysed frames versus selected frames. When frames were skipped, a partial-coverage notice makes clear that extrema, averages and ranked candidates describe the readable frames only; the temperatures of skipped frames remain unknown. The **Failures** box at the bottom of Measure lists the skipped frame numbers and errors (hover a row for the full message). If every selected frame fails, no temperature summary is produced. Failure details are cleared with a new analysis, changed marks, recalibration or Reset. **Reset** clears marks and results. I/O shortcuts are ignored while editing text or numeric fields.
 
@@ -356,7 +394,7 @@ The tests in `tests/samples.rs` and the FLIR screenshot in `tests/ui.rs` read re
 
 ## Usage
 
-The left activity bar switches between **Files** (Explorer) and **Look** (palette, range, mapping and display). Click the active icon again, use **Hide**, or press **Ctrl+B** to collapse the sidebar. **Ctrl+Shift+E** opens Explorer.
+The left activity bar switches between **Files** (Explorer), **Look** (palette, range, mapping and display), **Measure** (video range analysis), and experimental **Calibrate** (reference measurements and corrections). Click the active icon again, use **Hide**, or press **Ctrl+B** to collapse the sidebar. **Ctrl+Shift+E** opens Explorer.
 
 On desktop, **Open** and **Open folder** use the operating system's file and folder dialogs, including its drives, recent locations, sidebar and path navigation. The file dialog includes thermal-file filters and **All files**. Explorer shows the current directory, with folders first and expandable subfolders. **Open folder** changes the directory; **Up** goes to its parent; **Refresh** reloads the file list. Click a thermal image or CSQ file to open it. All files are listed; unsupported or unreadable files show an error and keep the current image/video open. Opening a file from outside the current directory switches Explorer to that file's folder. Browser builds retain the activity bar and image controls; filesystem browsing requires the desktop app.
 
@@ -364,9 +402,9 @@ On desktop, **Open** and **Open folder** use the operating system's file and fol
 2. Pick a palette on the left
 3. Drag the colour bar handles, type the window, or use a preset
 4. Click the image to place measurement points, rename them on the right
-5. Switch °C/°F, mapping, overscan, inversion, scale and overlays
+5. Switch °C/°F, mapping, overscan, inversion and overlays; use Ctrl+scroll over the image to zoom and the wheel to pan
 6. For FLIR R-JPEG, edit the calibration on the right
-7. **export** (ctrl+E) saves the view as a PNG next to the source file, or downloads it on the web
+7. **export** (ctrl+E) saves the full image, independent of viewer zoom, as a PNG next to the source file, or downloads it on the web
 
 ---
 

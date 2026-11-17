@@ -30,7 +30,16 @@ impl Harness {
     }
 
     pub fn frame(&mut self, events: Vec<Event>) {
-        let mut raw = RawInput { screen_rect: Some(self.screen), events, ..Default::default() };
+        self.frame_with_time(events, None);
+    }
+
+    pub fn frame_at(&mut self, events: Vec<Event>, time: f64) {
+        self.frame_with_time(events, Some(time));
+    }
+
+    fn frame_with_time(&mut self, events: Vec<Event>, time: Option<f64>) {
+        let mut raw =
+            RawInput { screen_rect: Some(self.screen), events, time, ..Default::default() };
         raw.viewports.entry(ViewportId::ROOT).or_default().native_pixels_per_point = Some(1.0);
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(raw, |ui| app.show(ui));
@@ -87,6 +96,21 @@ impl Harness {
             }
             _ => None,
         })
+    }
+
+    pub fn text_colors(&self, text: &str) -> Vec<egui::Color32> {
+        self.last
+            .as_ref()
+            .into_iter()
+            .flat_map(|out| &out.shapes)
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == text => {
+                    Some(t.galley.job.sections.iter().map(|s| s.format.color))
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect()
     }
 
     pub fn png(&self) -> Vec<u8> {

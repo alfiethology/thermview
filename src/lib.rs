@@ -13,6 +13,7 @@ pub mod export;
 pub mod formats;
 pub mod headless;
 pub mod host;
+pub mod hotspots;
 pub mod image;
 pub mod measure;
 pub mod overlay;
@@ -23,6 +24,7 @@ pub mod raster;
 pub mod startup;
 pub mod timeline;
 pub mod video;
+pub mod view;
 
 pub use formats::parse;
 pub use image::ThermalImage;

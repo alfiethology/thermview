@@ -11,6 +11,21 @@ All notable changes to thermview are listed here. The format follows
 - Fourth Calibrate tab with point/area reference selection, independent reference emissivity and distance, and an optional independently known surface temperature.
 - Cancellable video reference history, per-frame error plot and CSV audit report with failures and original reference readings.
 - Explicit optional per-frame additive target correction, kept separate from reference emissivity, reversible from retained raw counts, and included in range measurements and labelled image exports. Fixed-position, constant-temperature confirmation is required for multi-frame range correction.
+## [0.2.1] - 2026-11-16
+
+### Added
+- Previous hottest steps back one rank in Measure's hottest-frame list without restarting; previous/next controls stop at the list boundaries and preserve range statistics.
+- Current-frame Next hottest spot and Reset to hottest controls with selected temperature, pixel coordinates and an explicit spot marker in the viewer/exports. Plateau grouping and adjustable sensor-pixel spacing browse separated local peaks; browsing pauses playback and leaves true frame/range extrema unchanged.
+
+### Changed
+- Replace image scale buttons with cursor-centred Ctrl+scroll image zoom, wheel/trackpad panning, Shift+wheel horizontal panning, drag panning and Reset view. Preserve the image region across video frames independently of timeline zoom; image exports retain their full-frame resolution.
+- Default to Iron, listed before Inferno, and a 5–40°C colour range with video autorange off. The default range expands for newly encountered extrema without shrinking again; deliberate manual range edits stay fixed.
+- Use red for hottest/high readouts and blue for coldest/low readouts, including the colour bar and video/measurement summaries.
+
+### Fixed
+- Release publishing updates an existing release and replaces matching build assets on retry; a verified publish-only recovery can reuse completed platform builds.
+- Remove leftover experimental reference-correction dependencies from range measurement so v0.2.1 builds independently of the calibrate branch on all platforms.
+- Video playback skips unreadable frames and continues, recording skipped frame numbers/errors. Long runs of bad frames are processed in bounded batches, and playback stops safely at an unreadable tail.
 
 ## [0.2.0] - 2026-11-15
 
